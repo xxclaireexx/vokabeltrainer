@@ -20,7 +20,10 @@ function LearningMode({ list, onAnswer }: LearningModeProps) {
     const [isFinished, setIsFinished] = useState<boolean>(false);
     const [roundCorrect, setRoundCorrect] = useState<number>(0);
     const [roundWrong, setRoundWrong] = useState<number>(0);
+    const [wrongWords, setWrongWords] = useState<Vocabulary[]>([]);
+    const [seenWordIds, setSeenWordIds] = useState<number[]>([]);
     const [learningType, setLearningType] = useState<"all" | "difficult">("all");
+    const [selectedCount, setSelectedCount] = useState<number>(list.vocabularies.length);
     const [questionDirection, setQuestionDirection] =
         useState<"original" | "translation">("original");
 
@@ -61,25 +64,29 @@ function LearningMode({ list, onAnswer }: LearningModeProps) {
     }
 
     function checkAnswer() {
-        if (isChecked || !answer.trim()) return;
+        if (isChecked) return;
 
         const correctAnswer = questionDirection === "original"
             ? currentWord.translation
             : currentWord.original;
 
-        const isCorrect =
+        const isCorrect = answer.trim().length > 0 &&
             answer.trim().toLowerCase() ===
             correctAnswer.trim().toLowerCase();
 
         onAnswer(currentWord.id, isCorrect);
         setIsChecked(true);
+        setSeenWordIds(prev =>
+            prev.includes(currentWord.id) ? prev : [...prev, currentWord.id]
+        );
 
         if (isCorrect) {
             setFeedback("richtig");
             setRoundCorrect(prev => prev + 1);
         } else {
             setFeedback(`falsch; richtige Antwort: ${correctAnswer}`);
-            setRoundWrong(prev => prev + 1)
+            setRoundWrong(prev => prev + 1);
+            setWrongWords(prev => [...prev, currentWord]);
         }
         if (currentIndex === shuffledWords.length - 1) {
             setIsFinished(true);
@@ -106,46 +113,70 @@ function LearningMode({ list, onAnswer }: LearningModeProps) {
         setCurrentIndex(0);
         setRoundCorrect(0);
         setRoundWrong(0);
+        setWrongWords([]);
         setIsFinished(false);
     }
 
-    function restartLearning() {
-        const useDifficult =
-            learningType === "difficult" &&
-            difficultWords.length > 0;
+    function selectWords(words: Vocabulary[], count = selectedCount): Vocabulary[] {
+        return shuffleWords(words).slice(0, Math.min(count, words.length));
+    }
 
-        const words = useDifficult
+    function startRound(
+        words: Vocabulary[],
+        resetSeenWords = false,
+        count = selectedCount
+    ) {
+        const alreadySeen = resetSeenWords ? [] : seenWordIds;
+        let unseenWords = words.filter(word => !alreadySeen.includes(word.id));
+
+        if (unseenWords.length === 0) {
+            setSeenWordIds([]);
+            unseenWords = words;
+        } else if (resetSeenWords) {
+            setSeenWordIds([]);
+        }
+
+        setShuffledWords(selectWords(unseenWords, count));
+        resetLearning();
+    }
+
+    function repeatLearning() {
+        setShuffledWords(shuffleWords(shuffledWords));
+        resetLearning();
+    }
+
+    function repeatWrongWords() {
+        setShuffledWords(shuffleWords(wrongWords));
+        resetLearning();
+    }
+
+    function startNewLearningRound() {
+        const words = learningType === "difficult"
             ? difficultWords
             : list.vocabularies;
-
-        setLearningType(useDifficult ? "difficult" : "all");
-
-        setShuffledWords(shuffleWords(words));
-        resetLearning()
+        startRound(words);
     }
 
     function startAllLearning() {
+        const resetSeenWords = learningType !== "all";
         setLearningType("all");
-        setShuffledWords(shuffleWords(list.vocabularies));
-        resetLearning()
+        startRound(list.vocabularies, resetSeenWords);
     }
 
     function startDifficultLearning() {
         if (difficultWords.length === 0) return;
+        const resetSeenWords = learningType !== "difficult";
         setLearningType("difficult");
-        setShuffledWords(shuffleWords(difficultWords))
-        resetLearning()
+        startRound(difficultWords, resetSeenWords);
     }
 
     function changeDirection(direction: "original" | "translation") {
-    const words = learningType === "difficult"
-        ? difficultWords
-        : list.vocabularies;
-
-    setQuestionDirection(direction);
-    setShuffledWords(shuffleWords(words));
-    resetLearning()
-}
+        setQuestionDirection(direction);
+        const words = learningType === "difficult"
+            ? difficultWords
+            : list.vocabularies;
+        startRound(words, true);
+    }
 
     if (list.vocabularies.length === 0) {
         return <p>Diese Liste enthält noch keine Vokabeln.</p>;
@@ -185,8 +216,14 @@ function LearningMode({ list, onAnswer }: LearningModeProps) {
                     />
                 </div>
 
-                <button onClick={restartLearning}>
-                    Neue Lernrunde starten
+                <button onClick={repeatLearning}>
+                    Vokabeln wiederholen
+                </button>
+                <button onClick={repeatWrongWords} disabled={wrongWords.length === 0}>
+                    Falsch beantwortete Vokabeln wiederholen
+                </button>
+                <button onClick={startNewLearningRound}>
+                    Weiter
                 </button>
             </div>
         );
@@ -204,8 +241,30 @@ function LearningMode({ list, onAnswer }: LearningModeProps) {
             >
                 Schwierige Vokabeln üben
             </button> <button onClick={startAllLearning}>
-                Alle Vokabeln lernen
+                Ausgewählte Vokabeln lernen
             </button>
+            <label>
+                Vokabeln pro Lernrunde (1–{list.vocabularies.length}):
+                <input
+                    type="number"
+                    min={1}
+                    max={list.vocabularies.length}
+                    step={1}
+                    value={selectedCount}
+                    onChange={(event) => {
+                        const count = event.currentTarget.valueAsNumber;
+                        if (
+                            Number.isInteger(count) &&
+                            count >= 1 &&
+                            count <= list.vocabularies.length &&
+                            count !== selectedCount
+                        ) {
+                            setSelectedCount(count);
+                            setSeenWordIds([]);
+                        }
+                    }}
+                />
+            </label>
             <button onClick={() => changeDirection("original")}
                             disabled={questionDirection === "original"}>
                 Original → Übersetzung
@@ -233,7 +292,17 @@ function LearningMode({ list, onAnswer }: LearningModeProps) {
                 type="text"
                 placeholder="Übersetzung"
                 value={answer}
-                onChange={(e) => setAnswer(e.target.value)}>
+                onChange={(e) => setAnswer(e.target.value)}
+                onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                        event.preventDefault();
+                        if (isChecked) {
+                            nextWord();
+                        } else {
+                            checkAnswer();
+                        }
+                    }
+                }}>
             </input>
             <button onClick={checkAnswer} disabled={isChecked}>
                 Antwort überprüfen
@@ -242,8 +311,8 @@ function LearningMode({ list, onAnswer }: LearningModeProps) {
             {feedback && (
                 <p>{feedback}</p>
             )}
-            <button onClick={restartLearning}>
-                Neu mischen
+            <button onClick={startNewLearningRound}>
+                Neue Liste starten
             </button>
         </div>
 
